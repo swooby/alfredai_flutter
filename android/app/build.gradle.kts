@@ -5,10 +5,11 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+// Also see $flutterSdkPath/packages/flutter_tools/gradle/src/main/groovy/flutter.groovy
 android {
     namespace = "com.swooby.alfredai_flutter"
     compileSdk = flutter.compileSdkVersion
-    ndkVersion = flutter.ndkVersion
+    ndkVersion = "27.0.12077973" // flutter.ndkVersion defines 26.3.11579264, but webrtc wants 27.0.12077973
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
@@ -24,7 +25,7 @@ android {
         applicationId = "com.swooby.alfredai_flutter"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
+        minSdk = 23 // flutter.minSdkVersion defines 21, but webrtc wants 23
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
