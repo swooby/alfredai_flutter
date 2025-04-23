@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:logging/logging.dart';
 
 import 'my_home_page.dart';
+import 'my_view_model.dart';
 
 final _debug = kDebugMode || true;
 final _log = Logger('main');
@@ -17,15 +18,17 @@ void _loggingInit() {
   });
 }
 
-void main() {
+void main() async {
   _loggingInit();
   _log.info('+main()');
-  runApp(const MyApp());
+  final vm = await MyViewModel.create();
+  runApp(MyApp(viewModel: vm));
   _log.info('-main()');
 }
 
 class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+  final MyViewModel viewModel;
+  const MyApp({super.key, required this.viewModel});
 
   // This widget is the root of your application.
   @override

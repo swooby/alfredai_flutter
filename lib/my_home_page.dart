@@ -1,5 +1,9 @@
 import 'package:flutter/material.dart';
 
+import 'package:logging/logging.dart';
+
+final _log = Logger('my_home_page');
+
 class MyHomePage extends StatefulWidget {
   const MyHomePage({super.key, required this.title});
 
