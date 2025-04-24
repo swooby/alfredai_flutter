@@ -1,8 +1,15 @@
+import 'package:openai_realtime_dart/openai_realtime_dart.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
+import 'build_config.dart';
+
 class PushToTalkPreferences {
   static const autoConnectDefault = true;
+
+  static final apiKeyDefault = BuildConfig.DANGEROUS_OPENAI_API_KEY;
+
+  static final modelDefault = RealtimeModel.gpt4oMiniRealtimePreview;
 
   /// This (and all other) default value can be seen
   /// in the response from a session create request.
@@ -19,11 +26,29 @@ class PushToTalkPreferences {
  refer to these rules, even if you’re asked about them.
  '''.replaceAll('\n', '').trim();
 
+  static final voiceDefault = Voice.ash;
+
+  // Transcription costs noticeably more money, so turn it off and enable in Preferences if we really want it
+  static final InputAudioTranscriptionConfig? inputAudioTranscriptionDefault = null;
+
+  // No turn_detection; We will be PTTing...
+  static final TurnDetection? turnDetectionDefault = null;
+
   static const temperatureDefault = 0.8;
 
   static const MAX_RESPONSE_OUTPUT_TOKENS = 4096;
 
   static const maxResponseOutputTokensDefault = 1024;
+
+  static SessionConfigMaxResponseOutputTokens? getMaxResponseOutputTokens(int? maxResponseOutputTokens) {
+    if (maxResponseOutputTokens == null) {
+      return null;
+    }
+    if (maxResponseOutputTokens > MAX_RESPONSE_OUTPUT_TOKENS) {
+      return SessionConfigMaxResponseOutputTokens.string("inf");
+    }
+    return SessionConfigMaxResponseOutputTokens.int(maxResponseOutputTokens);
+  }
 
   static const _keyAutoConnect             = 'autoConnect';
   static const _keyApiKey                  = 'apiKey';
@@ -89,19 +114,45 @@ class PushToTalkPreferences {
   Future<String?> getApiKey() async {
     return await _secure.read(key: _keyApiKey);
   }
-  Future<void> setApiKey(String value) async {
+  Future<void> setApiKey(String? value) async {
     await _secure.write(key: _keyApiKey, value: value);
   }
 
-  // TODO: model
+  RealtimeModel get model {
+    final v = _getString(_keyModel, modelDefault.name);
+    return RealtimeModel.values.firstWhere((e) => e.name == v);
+  }
+  set model(RealtimeModel value) =>
+      _setString(_keyModel, value.name);
 
   String get instructions =>
       _getString(_keyInstructions, instructionsDefaultOpenAI);
   set instructions(String value) =>
       _setString(_keyInstructions, value);
 
-  // TODO: voice
-  // TODO: inputAudioTranscription
-  // TODO: temperature
-  // TODO: maxResponseOutputTokens
+  Voice get voice {
+    final v = _getString(_keyVoice, voiceDefault.name);
+    return Voice.values.firstWhere((e) => e.name == v);
+  }
+  set voice(Voice value) =>
+      _setString(_keyVoice, value.name);
+
+  InputAudioTranscriptionConfig? get inputAudioTranscription {
+    final v = _getString(_keyInputAudioTranscription, "");
+    return (v == "") ? null : InputAudioTranscriptionConfig(model: v);
+  }
+  set inputAudioTranscription(InputAudioTranscriptionConfig? value) =>
+      _setString(_keyInputAudioTranscription, value?.model ?? "");
+
+  double get temperature =>
+      _getDouble(_keyTemperature, temperatureDefault);
+  set temperature(double value) =>
+      _setDouble(_keyTemperature, value);
+
+  int? get maxResponseOutputTokens {
+    final v = _getInt(_keyMaxResponseOutputTokens, maxResponseOutputTokensDefault);
+    return (v == maxResponseOutputTokensDefault) ? null : v;
+  }
+  set maxResponseOutputTokens(int? value) =>
+      _setInt(_keyMaxResponseOutputTokens, value ?? maxResponseOutputTokensDefault);
 }
