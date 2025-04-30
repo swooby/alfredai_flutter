@@ -1,10 +1,21 @@
+import 'dart:math';
+
 import 'package:alfredai_flutter/push_to_talk_preferences.dart';
+import 'package:alfredai_flutter/push_to_talk_widget.dart';
+import 'package:alfredai_flutter/utils.dart';
 import 'package:flutter/foundation.dart';
 import 'package:logging/logging.dart';
 import 'package:openai_realtime_dart/openai_realtime_dart.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 final _log = Logger('my_view_model');
+
+enum ViewModelError {
+  /// error == "none" can be thought of as an alias for "success"
+  none,
+  isNotConfigured,
+  missingRequiredPermissions,
+}
 
 enum ConnectionState {
   connecting,
@@ -60,26 +71,130 @@ class ConnectionStateProvider {
   }
 }
 
+enum ConversationItemType {
+  local,
+  remote,
+  function,
+}
+
+class ConversationItem {
+  final String? id;
+  final String? responseId;
+  final ConversationItemType type;
+  final String initialText;
+  final DateTime timestamp;
+  bool incomplete;
+  final String functionCallId;
+  final String functionName;
+  String functionArguments;
+  String functionOutput;
+
+  /// A mutable, listenable copy of the text.
+  final ValueNotifier<String> text;
+
+  ConversationItem({
+    required this.id,
+    this.responseId,
+    required this.type,
+    required this.initialText,
+    DateTime? timestamp,
+    this.incomplete = false,
+    this.functionCallId = '',
+    this.functionName = '',
+    this.functionArguments = '',
+    this.functionOutput = '',
+  })  : timestamp = timestamp ?? DateTime.now(),
+        text = ValueNotifier<String>(initialText);
+
+  @override
+  String toString() {
+    return 'ConversationItem('
+        'id: ${quote(id)}, '
+        'type: $type, '
+        'timestamp: $timestamp, '
+        'incomplete: $incomplete, '
+        'text: ${quote(text.value)}, '
+        'functionCallId: ${quote(functionCallId)}, '
+        'functionName: ${quote(functionName)}, '
+        'functionArguments: ${quote(functionArguments)}, '
+        'functionOutput: ${quote(functionOutput)}'
+        ')';
+  }
+}
+
 class MyViewModel {
   //region constants
-  static final bool debugToastVerbose = kDebugMode && false;
-  static final bool debugForceNotConfigured = kDebugMode && false;
-  static final bool debugForceDoNotAutoConnect = kDebugMode && false;
-  static final int debugSimulateSessionExpiredMillis = (kDebugMode && false) ? 20_000 : 0;
-  static final int debugConnectDelayMillis = (kDebugMode && false) ? 10_000 : 0;
-  static final bool debugLogConversation = kDebugMode && true;
-  static final int debugFakeConversationCount = (kDebugMode && false) ? 20 : 0;
+  static final bool _debugToastVerbose = kDebugMode && false;
+  static final bool _debugForceNotConfigured = kDebugMode && false;
+  static final bool _debugForceDoNotAutoConnect = kDebugMode && false;
+  static final int _debugSimulateSessionExpiredMillis = (kDebugMode && false) ? 20_000 : 0;
+  static final int _debugConnectDelayMillis = (kDebugMode && false) ? 10_000 : 0;
+  static final bool _debugLogConversation = kDebugMode && true;
+  static final int _debugFakeConversationCount = (kDebugMode && false) ? 20 : 0;
   //endregion constants
 
-  final PushToTalkPreferences _prefs;
-  final ValueNotifier<ConnectionState> _connectionState;
-  final ConnectionStateProvider _connectionStateProvider;
+  late List<ConversationItem> conversationItems;
+
+  List<ConversationItem> generateRandomConversationItems({required int count}) {
+    if (count <= 0) {
+      throw ArgumentError('count must be greater than 0');
+    }
+
+    final random = Random();
+    final items = <ConversationItem>[];
+
+    String generateRandomSentence(int maxWords) {
+      if (maxWords <= 0) {
+        throw ArgumentError('maxWords must be greater than 0');
+      }
+
+      final wordCount = random.nextInt(maxWords) + 1; // [1..maxWords]
+      final words = List<String>.generate(wordCount, (_) {
+        final length = random.nextInt(10) + 1; // [1..10]
+        return String.fromCharCodes(
+          List<int>.generate(length, (_) => random.nextInt(26) + 97),
+        );
+      });
+
+      final sentence = words.join(' ');
+      return '${sentence[0].toUpperCase()}${sentence.substring(1)}.';
+    }
+
+    for (var i = 0; i < count; i++) {
+      // pick a random maxWords in [5..30]
+      final maxWords = random.nextInt(30 - 5 + 1) + 5;
+      items.add(ConversationItem(
+        id: '$i',
+        type: ConversationItemType
+            .values[random.nextInt(ConversationItemType.values.length)],
+        initialText: generateRandomSentence(maxWords),
+      ));
+    }
+
+    return items;
+  }
+
+  List<ConversationItem> initialConversations() {
+    return (_debugFakeConversationCount > 0) ?
+    generateRandomConversationItems(count: _debugFakeConversationCount)
+        : [];
+  }
 
   MyViewModel._(
       this._prefs,
       this._connectionState,
       this._connectionStateProvider,
-      );
+      )
+      : _autoConnectNotifier = ValueNotifier<bool>(_prefs.autoConnect),
+        _apiKeyNotifier = ValueNotifier<String>(_prefs.apiKey),
+        _modelNotifier = ValueNotifier<RealtimeModel>(_prefs.model),
+        _instructionsNotifier = ValueNotifier<String>(_prefs.instructions),
+        _voiceNotifier = ValueNotifier<Voice>(_prefs.voice),
+        _inputAudioTranscriptionNotifier = ValueNotifier<InputAudioTranscriptionConfig?>(_prefs.inputAudioTranscription),
+        _temperatureNotifier = ValueNotifier<double>(_prefs.temperature),
+        _maxResponseOutputTokensNotifier = ValueNotifier<int?>(_prefs.maxResponseOutputTokens) {
+    conversationItems = initialConversations();
+  }
 
   static Future<MyViewModel> create() async {
     final prefs = await PushToTalkPreferences.init();
@@ -87,55 +202,276 @@ class MyViewModel {
     final provider = ConnectionStateProvider(
       connectionStateNotifier: connectionState,
     );
-    return MyViewModel._(prefs, connectionState, provider);
+    final viewModel = MyViewModel._(prefs, connectionState, provider);
+    //await viewModel.initialize();
+    return viewModel;
+  }
+
+  Future<void> initialize() async {
+    _log.info('+initialize()');
+
+    _updateIsConfiguredState();
+
+    await _updatePermissionsState();
+
+    _log.info('-initialize()');
+  }
+
+  void dispose() {
+    _log.info('+dispose()');
+
+    _connectionState.dispose();
+    disconnect();
+    onDisconnecting();
+    onDisconnected();
+
+    _connectionStateProvider.dispose();
+    _autoConnectNotifier.dispose();
+    _apiKeyNotifier.dispose();
+    _modelNotifier.dispose();
+    _instructionsNotifier.dispose();
+    _voiceNotifier.dispose();
+    _inputAudioTranscriptionNotifier.dispose();
+    _temperatureNotifier.dispose();
+    _maxResponseOutputTokensNotifier.dispose();
+
+    _log.info('-dispose()');
   }
 
   //region permissions
+
+  final _requiredPermissions = List<Permission>.unmodifiable([
+    Permission.microphone,
+  ]);
+
+  Future<List<Permission>> get missingRequiredPermissions async {
+    _log.info('+get missingRequiredPermissions');
+    List<Permission> missingPermissions = [];
+    for (final permission in _requiredPermissions) {
+      if (!await permission.isGranted) {
+        missingPermissions.add(permission);
+      }
+    }
+    _log.info('get missingRequiredPermissions: missingPermissions=$missingPermissions');
+    _log.info('-get missingRequiredPermissions');
+    return List.unmodifiable(missingPermissions);
+  }
+
+  Future<void> requestMissingRequiredPermissions() async {
+    try {
+      _log.info('+requestMissingRequiredPermissions()');
+      for (final permission in await missingRequiredPermissions) {
+        _log.info('requestMissingRequiredPermissions: Requesting missing required permission: $permission');
+        await permission.request();
+      }
+      await _updatePermissionsState();
+    } finally {
+      _log.info('-requestMissingRequiredPermissions()');
+    }
+  }
+
+  final ValueNotifier<bool> _hasAllRequiredPermissions = ValueNotifier(false);
+  ValueListenable<bool> get hasAllRequiredPermissions => _hasAllRequiredPermissions;
+
+  Future<void> _updatePermissionsState() async {
+    try {
+      _log.info('+_updatePermissionsState()');
+      _hasAllRequiredPermissions.value = (await missingRequiredPermissions).isEmpty;
+      _maybeAutoConnect();
+    } finally {
+      _log.info('-_updatePermissionsState()');
+    }
+  }
 
   //endregion permissions
 
   //region preferences
 
-  bool get autoConnect => _prefs.autoConnect;
-  set autoConnect(bool value) => _prefs.autoConnect = value;
+  final PushToTalkPreferences _prefs;
 
-  Future<String?> getApiKey() async => await _prefs.getApiKey();
-  Future<void> setApiKey(String? value) async => await _prefs.setApiKey(value);
+  final ValueNotifier<bool> _autoConnectNotifier;
+  ValueListenable<bool> get autoConnect => _autoConnectNotifier;
+  void _setAutoConnect(bool value) {
+    _prefs.autoConnect = value;
+    _autoConnectNotifier.value = value;
+  }
 
-  RealtimeModel get model => _prefs.model;
-  set model(RealtimeModel value) => _prefs.model = value;
+  final ValueNotifier<String> _apiKeyNotifier;
+  ValueListenable<String> get apiKey => _apiKeyNotifier;
+  void _setApiKey(String value) {
+    _prefs.apiKey = value;
+    _apiKeyNotifier.value = value;
+  }
 
-  String get instructions => _prefs.instructions;
-  set instructions(String value) => _prefs.instructions = value;
+  final ValueNotifier<RealtimeModel> _modelNotifier;
+  ValueListenable<RealtimeModel> get model => _modelNotifier;
+  void _setModel(RealtimeModel value) {
+    _prefs.model = value;
+    _modelNotifier.value = value;
+  }
 
-  Voice get voice => _prefs.voice;
-  set voice(Voice value) => _prefs.voice = value;
+  final ValueNotifier<String> _instructionsNotifier;
+  ValueListenable<String> get instructions => _instructionsNotifier;
+  void _setInstructions(String value) {
+    _prefs.instructions = value;
+    _instructionsNotifier.value = value;
+  }
 
-  InputAudioTranscriptionConfig? get inputAudioTranscription => _prefs.inputAudioTranscription;
-  set inputAudioTranscription(InputAudioTranscriptionConfig? value) => _prefs.inputAudioTranscription = value;
+  final ValueNotifier<Voice> _voiceNotifier;
+  ValueListenable<Voice> get voice => _voiceNotifier;
+  void _setVoice(Voice value) {
+    _prefs.voice = value;
+    _voiceNotifier.value = value;
+  }
 
-  double get temperature => _prefs.temperature;
-  set temperature(double value) => _prefs.temperature = value;
+  final ValueNotifier<InputAudioTranscriptionConfig?> _inputAudioTranscriptionNotifier;
+  ValueListenable<InputAudioTranscriptionConfig?> get inputAudioTranscription => _inputAudioTranscriptionNotifier;
+  void _setInputAudioTranscription(InputAudioTranscriptionConfig? value) {
+    _prefs.inputAudioTranscription = value;
+    _inputAudioTranscriptionNotifier.value = value;
+  }
 
-  int? get maxResponseOutputTokens => _prefs.maxResponseOutputTokens;
-  set maxResponseOutputTokens(int? value) => _prefs.maxResponseOutputTokens = value;
+  final ValueNotifier<double> _temperatureNotifier;
+  ValueListenable<double> get temperature => _temperatureNotifier;
+  void _setTemperature(double value) {
+    _prefs.temperature = value;
+    _temperatureNotifier.value = value;
+  }
 
-  Future<bool> checkIsConfigured() async {
-    return !debugForceNotConfigured && await getApiKey() != null;
+  final ValueNotifier<int?> _maxResponseOutputTokensNotifier;
+  ValueListenable<int?> get maxResponseOutputTokens => _maxResponseOutputTokensNotifier;
+  void _setMaxResponseOutputTokens(int? value) {
+    _prefs.maxResponseOutputTokens = value;
+    _maxResponseOutputTokensNotifier.value = value;
   }
 
   final ValueNotifier<bool> _isConfigured = ValueNotifier(false);
   ValueListenable<bool> get isConfigured => _isConfigured;
-  void updateIsConfigured() async {
-    _isConfigured.value = await checkIsConfigured();
+  void _updateIsConfiguredState() {
+    _log.info('+_updateIsConfiguredState()');
+    final isConfigured = !_debugForceNotConfigured && apiKey.value.isNotEmpty;
+    _log.info('_updateIsConfiguredState: isConfigured=$isConfigured');
+    _isConfigured.value = isConfigured;
+    _log.info('-_updateIsConfiguredState()');
+  }
+
+  /*
+  SessionConfig get sessionConfig {
+    return SessionConfig(
+      instructions: instructions,
+      voice: voice,
+      inputAudioTranscription: inputAudioTranscription,
+      temperature: temperature,
+      turnDetection: PushToTalkPreferences.turnDetectionDefault,
+      maxResponseOutputTokens: PushToTalkPreferences.getMaxResponseOutputTokens(maxResponseOutputTokens),
+    );
+  }
+  */
+
+  void updatePreferences(
+      bool autoConnect,
+      String apiKey,
+      RealtimeModel model,
+      String instructions,
+      Voice voice,
+      InputAudioTranscriptionConfig? inputAudioTranscription,
+      double temperature,
+      int maxResponseOutputTokens
+      ) async {
+    try {
+      _log.info('+updatePreferences()');
+
+      _setAutoConnect(autoConnect);
+
+      bool reinitialize = _realtimeClient == null;
+      bool updateSession = false;
+      bool reconnectSession = false;
+
+      if (apiKey != this.apiKey.value) {
+        reinitialize = true;
+        _setApiKey(apiKey);
+      }
+
+      if (model != this.model.value) {
+        reinitialize = true;
+        _setModel(model);
+      }
+
+      if (instructions != this.instructions.value) {
+        updateSession = true;
+        _setInstructions(instructions);
+      }
+
+      /**
+       * https://platform.openai.com/docs/api-reference/realtime-client-events/session
+       * "session.update
+       * ... The client may send this event at any time to update the session configuration,
+       * and any field may be updated at any time, except for "voice"."
+       */
+      if (voice != this.voice.value) {
+        reconnectSession = true;
+        _setVoice(voice);
+      }
+
+      if (inputAudioTranscription != this.inputAudioTranscription.value) {
+        updateSession = true;
+        _setInputAudioTranscription(inputAudioTranscription);
+      }
+
+      if (temperature != this.temperature.value) {
+        updateSession = true;
+        _setTemperature(temperature);
+      }
+
+      if (maxResponseOutputTokens != this.maxResponseOutputTokens.value) {
+        updateSession = true;
+        _setMaxResponseOutputTokens(maxResponseOutputTokens);
+      }
+
+      _updateIsConfiguredState();
+
+      if (reinitialize) {
+        _tryInitRealtimeClient();
+      } else {
+        if (isConnectingOrConnected.value) {
+          if (isConnecting.value || reconnectSession) {
+            await reconnect();
+          } else {
+            if (isConnected.value && updateSession) {
+              _realtimeClient?.updateSession(
+                instructions: instructions,
+                voice: voice,
+                inputAudioTranscription: inputAudioTranscription,
+                temperature: temperature,
+                turnDetection: PushToTalkPreferences.turnDetectionDefault,
+                maxResponseOutputTokens: PushToTalkPreferences
+                    .getMaxResponseOutputTokens(maxResponseOutputTokens),
+              );
+            }
+          }
+        }
+      }
+    } finally {
+      _log.info('-updatePreferences()');
+    }
   }
 
   //endregion preferences
 
   //region connection state
 
+  void setConnectionState(ConnectionState state) {
+    _log.info('setConnectionState($state)');
+    _connectionState.value = state;
+  }
+
+  final ValueNotifier<ConnectionState> _connectionState;
+  final ConnectionStateProvider _connectionStateProvider;
+
   ValueListenable<ConnectionState> get connectionState =>
       _connectionStateProvider.connectionState;
+  ValueListenable<bool> get isConnecting =>
+      _connectionStateProvider.isConnecting;
   ValueListenable<bool> get isConnected =>
       _connectionStateProvider.isConnected;
   ValueListenable<bool> get isConnectingOrConnected =>
@@ -149,32 +485,126 @@ class MyViewModel {
 
   bool _isDisconnectManual = false;
 
-  RealtimeClient? realtimeClient;
+  RealtimeClient? _realtimeClient;
 
-  Future<bool> _tryInitClient() async {
-    _log.info('tryInitClient()');
-    if (!isConfigured.value) {
-      _log.warning('tryInitClient: Not configured; not initializing realtimeClient');
-      return false;
+  Future<ViewModelError> _tryInitRealtimeClient() async {
+    try {
+      _log.info('+_tryInitRealtimeClient()');
+
+      if (!isConfigured.value) {
+        _log.warning(
+            '_tryInitRealtimeClient: Not configured; not initializing realtimeClient');
+        return ViewModelError.isNotConfigured;
+      }
+
+      if (!hasAllRequiredPermissions.value) {
+        _log.warning(
+            '_tryInitRealtimeClient: Not all permissions granted; not initializing realtimeClient');
+        return ViewModelError.missingRequiredPermissions;
+      }
+
+      _disconnectInternal();
+
+      _realtimeClient = RealtimeClient(
+        transportType: RealtimeTransportType.webrtc,
+        apiKey: apiKey.value,
+        debug: true,
+      );
+      await _realtimeClient?.updateSession(
+      );
+      _realtimeClient?.on(RealtimeEventType.all, (event) async {
+        switch (event.type) {
+          case RealtimeEventType.sessionCreated:
+            _log.fine('sessionCreated: $event');
+            // Whether it is intentional or a bug, some settings like...
+            // * `input_audio_transcription`
+            // * `turn_detection`
+            // ...don't take affect when creating a session:
+            // https://platform.openai.com/docs/api-reference/realtime-sessions/create
+            // https://platform.openai.com/docs/api-reference/realtime-sessions/create#realtime-sessions-create-input_audio_transcription
+            // Proof is to enable okhttp logging and see a non-default value getting sent
+            // in the Request but the default value coming back in the Response. :/
+            // Forum post explaining:
+            // https://community.openai.com/t/issues-with-transcription-in-realtime-model-using-webrtc/1068762/4
+            //
+            // So, this code re-applies the sessionConfig after the session and data channel are open.
+            // There is a mention that specifying `model` during a session.update causes issues.
+            //
+            // https://platform.openai.com/docs/api-reference/realtime-client-events/session/update
+            //
+            await _realtimeClient?.updateSession();
+            break;
+          case RealtimeEventType.sessionUpdated:
+            _log.fine('sessionUpdated: $event');
+            if (_connectionState.value == ConnectionState.connecting) {
+              _log.info('_connectionState: CONNECTING -> CONNECTED!');
+              setConnectionState(ConnectionState.connected);
+            }
+            break;
+          default:
+          // ignore
+            break;
+        }
+      });
+
+      _log.info(
+          '_tryInitRealtimeClient: realtimeClient initialized successfully');
+      return ViewModelError.none;
+    } finally {
+      _log.info('-_tryInitRealtimeClient()');
     }
-    _log.info('tryInitClient: realtimeClient initialized successfully');
-    return true;
   }
 
-  void maybeAutoConnect() async {
-    _log.info('maybeAutoConnect()');
-    if (debugForceDoNotAutoConnect) {
-      _log.warning('maybeAutoConnect: Auto-connect is [debug] forced disabled');
-      return;
+  void _maybeAutoConnect() async {
+    try {
+      _log.info('+_maybeAutoConnect()');
+      if (!hasAllRequiredPermissions.value) {
+        _log.warning(
+            '_maybeAutoConnect: Not all permissions granted; not auto-connecting');
+        return;
+      }
+      if (_debugForceDoNotAutoConnect) {
+        _log.warning(
+            '_maybeAutoConnect: Auto-connect is [debug] forced disabled');
+        return;
+      }
+      if (!autoConnect.value) {
+        _log.info('_maybeAutoConnect: Auto-connect is disabled');
+        return;
+      }
+      if (_isDisconnectManual) {
+        _log.info(
+            '_maybeAutoConnect: Manually disconnected; Ignore auto-connect');
+      }
+      await connect();
+    } finally {
+      _log.info('-_maybeAutoConnect()');
     }
-    if (!autoConnect) {
-      _log.info('maybeAutoConnect: Auto-connect is disabled');
-      return;
+  }
+
+  Future<void> connect() async {
+    try {
+      _log.info('+connect()');
+      if (isConnectingOrConnected.value) {
+        _log.info('connect: Already connecting or connected');
+        return;
+      }
+
+      if (_realtimeClient == null && (await _tryInitRealtimeClient() != ViewModelError.none)) {
+        _log.info('connect: _tryInitRealtimeClient() return false; not connecting');
+        return;
+      }
+
+      _isDisconnectManual = false;
+
+      _log.info('connect: Attempting to connect...');
+      if (await _realtimeClient!.connect(
+      )) {
+        setConnectionState(ConnectionState.connecting);
+      }
+    } finally {
+      _log.info('-connect()');
     }
-    if (_isDisconnectManual) {
-      _log.info('maybeAutoConnect: Manually disconnected; Ignore auto-connect');
-    }
-    await connect();
   }
 
   void disconnect({bool isManual = false}) {
@@ -194,25 +624,74 @@ class MyViewModel {
         _isDisconnectManual = true;
       }
 
-      disconnectInternal(isClient: isClient);
+      _disconnectInternal(isClient: isClient);
     } finally {
       _log.info('-disconnect(isManual: $isManual, isClient: $isClient)');
     }
   }
 
-  void disconnectInternal({bool isClient = false}) {
+  void _disconnectInternal({bool isClient = false}) {
     try {
-      _log.info('+disconnectInternal(isClient: $isClient)');
-      _connectionState.value = ConnectionState.disconnecting;
+      _log.info('+_disconnectInternal(isClient: $isClient)');
+      setConnectionState(ConnectionState.disconnecting);
       if (isClient) {
-        _log.info('disconnectInternal: Disconnect request **FROM RealtimeClient**; Intentionally **NOT** calling `realtimeClient.disconnect()`');
+        _log.info('_disconnectInternal: Disconnect request **FROM RealtimeClient**; Intentionally **NOT** calling `realtimeClient.disconnect()`');
       } else {
+        final realtimeClient = _realtimeClient;
+        if (realtimeClient != null) {
+          _log.info('_disconnectInternal: Disconnecting RealtimeClient...');
+          realtimeClient.disconnect();
+          _log.info('_disconnectInternal: ...RealtimeClient disconnected');
+        }
       }
-      _connectionState.value = ConnectionState.disconnected;
+      setConnectionState(ConnectionState.disconnected);
     } finally {
-      _log.info('-disconnectInternal(isClient: $isClient)');
+      _log.info('-_disconnectInternal(isClient: $isClient)');
     }
   }
 
+  Future<void> reconnect() async {
+    _log.info('+reconnect()');
+    disconnect();
+    await connect();
+    _log.info('-reconnect()');
+  }
+
+  void onDisconnecting() {
+    _log.info('+onDisconnecting()');
+    _log.info('-onDisconnecting()');
+  }
+
+  void onDisconnected() {
+    _log.info('+onDisconnected()');
+    _log.info('-onDisconnected()');
+  }
+
   //endregion connection state
+
+  //region PushToTalk
+
+  final pttState = ValueNotifier<PttState>(PttState.disabled);
+
+  bool isCancelingResponse = false;
+
+  void startPushToTalk() async {
+    _log.info('startPushToTalk()');
+    await pushToTalk(true);
+    pttState.value = PttState.pressed;
+  }
+
+  void stopPushToTalk() async {
+    _log.info('stopPushToTalk()');
+    await pushToTalk(false);
+    pttState.value = PttState.idle;
+  }
+
+  Future<void> pushToTalk(bool enable) async {
+  }
+
+  //endregion PushToTalk
+
+  Future<void> sendText(String text) async {
+  }
 }

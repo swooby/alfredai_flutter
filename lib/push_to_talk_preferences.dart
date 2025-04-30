@@ -1,10 +1,17 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:logging/logging.dart';
 import 'package:openai_realtime_dart/openai_realtime_dart.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import 'build_config.dart';
+import 'my_view_model.dart' as myvm;
+import 'my_view_model_provider.dart';
+
+final _log = Logger('push_to_talk_preferences');
 
 class PushToTalkPreferences {
+  //region defaults
   static const autoConnectDefault = true;
 
   static final apiKeyDefault = BuildConfig.DANGEROUS_OPENAI_API_KEY;
@@ -40,6 +47,8 @@ class PushToTalkPreferences {
 
   static const maxResponseOutputTokensDefault = 1024;
 
+  //endregion defaults
+
   static SessionConfigMaxResponseOutputTokens? getMaxResponseOutputTokens(int? maxResponseOutputTokens) {
     if (maxResponseOutputTokens == null) {
       return null;
@@ -59,16 +68,18 @@ class PushToTalkPreferences {
   static const _keyTemperature             = 'temperature';
   static const _keyMaxResponseOutputTokens = 'maxResponseOutputTokens';
 
-  final SharedPreferences _prefs;
-  final FlutterSecureStorage _secure;
-
-  PushToTalkPreferences._(this._prefs, this._secure);
-
   static Future<PushToTalkPreferences> init() async {
     final prefs = await SharedPreferences.getInstance();
     final secure = const FlutterSecureStorage();
-    return PushToTalkPreferences._(prefs, secure);
+    final apiKey = await secure.read(key: _keyApiKey) ?? apiKeyDefault;
+    return PushToTalkPreferences._(prefs, secure, apiKey);
   }
+
+  final SharedPreferences _prefs;
+  final FlutterSecureStorage _secure;
+  String _apiKey;
+
+  PushToTalkPreferences._(this._prefs, this._secure, this._apiKey);
 
   //region generic get/set primitives
 
@@ -111,11 +122,10 @@ class PushToTalkPreferences {
   set autoConnect(bool value) =>
       _setBool(_keyAutoConnect, value);
 
-  Future<String?> getApiKey() async {
-    return await _secure.read(key: _keyApiKey);
-  }
-  Future<void> setApiKey(String? value) async {
-    await _secure.write(key: _keyApiKey, value: value);
+  String get apiKey => _apiKey;
+  set apiKey(String value) {
+    _apiKey = value;
+    _secure.write(key: _keyApiKey, value: value);
   }
 
   RealtimeModel get model {
@@ -156,3 +166,240 @@ class PushToTalkPreferences {
   set maxResponseOutputTokens(int? value) =>
       _setInt(_keyMaxResponseOutputTokens, value ?? maxResponseOutputTokensDefault);
 }
+
+//
+//
+//
+
+class PushToTalkPreferencesScreen extends StatefulWidget {
+  final String title;
+  final VoidCallback? onSaveSuccess;
+  final void Function(VoidCallback?)? setSaveButtonCallback;
+
+  const PushToTalkPreferencesScreen({
+    super.key,
+    required this.title,
+    this.onSaveSuccess,
+    this.setSaveButtonCallback,
+  });
+
+  @override
+  _PushToTalkPreferencesScreenState createState() =>
+      _PushToTalkPreferencesScreenState();
+}
+
+class _PushToTalkPreferencesScreenState
+    extends State<PushToTalkPreferencesScreen> {
+  late myvm.MyViewModel _viewModel;
+
+  late bool _editedAutoConnect;
+  final TextEditingController _editedApiKey = TextEditingController();
+  bool _apiKeyObscured = true;
+  late RealtimeModel _editedModel;
+  final TextEditingController _editedInstructions = TextEditingController();
+  late Voice _editedVoice;
+  final List<InputAudioTranscriptionConfig> _transcriptionOptions = [
+    InputAudioTranscriptionConfig(model: 'gpt-4o-transcribe'),
+    InputAudioTranscriptionConfig(model: 'gpt-4o-mini-transcribe'),
+    InputAudioTranscriptionConfig(model: 'whisper-1'),
+  ];
+  late InputAudioTranscriptionConfig _editedTranscription;
+  late double _editedTemperature;
+  late int _editedMaxResponseTokens;
+  late int _lastMaxResponseTokens;
+
+  @override
+  void didChangeDependencies() {
+    _log.info('+didChangeDependencies()');
+    super.didChangeDependencies();
+    _viewModel = MyViewModelProvider.of(context);
+
+    _editedAutoConnect = _viewModel.autoConnect.value;
+    _editedApiKey.text = _viewModel.apiKey.value;
+    _editedModel = _viewModel.model.value;
+    _editedInstructions.text = _viewModel.instructions.value;
+    _editedVoice = _viewModel.voice.value;
+    _editedTranscription = _viewModel.inputAudioTranscription.value ?? _transcriptionOptions[1];
+    _editedTemperature = _viewModel.temperature.value;
+    _editedMaxResponseTokens = _viewModel.maxResponseOutputTokens.value ?? PushToTalkPreferences.MAX_RESPONSE_OUTPUT_TOKENS;
+    _log.info('-didChangeDependencies()');
+  }
+
+  @override
+  void dispose() {
+    _log.info('+dispose()');
+    _editedApiKey.dispose();
+    _editedInstructions.dispose();
+    super.dispose();
+    _log.info('-dispose()');
+  }
+
+  void _saveOperation() {
+    _viewModel.updatePreferences(
+      _editedAutoConnect,
+      _editedApiKey.text.trim(),
+      _editedModel,
+      _editedInstructions.text.trim(),
+      _editedVoice,
+      _editedTranscription,
+      _editedTemperature,
+      _editedMaxResponseTokens,
+    );
+    widget.onSaveSuccess?.call();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
+        title: Text(widget.title),
+        actions: [
+          TextButton(
+            onPressed: () {
+              setState(() {
+                _saveOperation();
+              });
+            },
+          ),
+        ],
+      ),
+      body: SingleChildScrollView(
+        padding: EdgeInsets.all(16),
+        child: Column(
+          children: [
+            SwitchListTile(
+              title: Text('Auto Connect'),
+              value: _editedAutoConnect,
+              onChanged: (v) => setState(() => _editedAutoConnect = v),
+            ),
+            SizedBox(height: 16),
+            TextField(
+              controller: _editedApiKey,
+              obscureText: _apiKeyObscured,
+              decoration: InputDecoration(
+                labelText: 'OpenAI API Key',
+                border: OutlineInputBorder(),
+                suffixIcon: IconButton(
+                  icon: Icon(_apiKeyObscured
+                      ? Icons.visibility
+                      : Icons.visibility_off),
+                  onPressed: () => setState(
+                          () => _apiKeyObscured = !_apiKeyObscured),
+                ),
+              ),
+            ),
+            SizedBox(height: 16),
+            DropdownButtonFormField<String>(
+              decoration: InputDecoration(
+                labelText: 'Model',
+                border: OutlineInputBorder(),
+              ),
+              value: _editedModel.name,
+              items: RealtimeModel.values
+                  .map((m) => DropdownMenuItem(value: m.name, child: Text(m.name)))
+                  .toList(),
+              onChanged: (v) => setState(() {
+                if (v != null) _editedModel = RealtimeModel.values.firstWhere((m) => m.name == v);
+              }),
+            ),
+            SizedBox(height: 16),
+            TextField(
+              controller: _editedInstructions,
+              maxLines: 4,
+              decoration: InputDecoration(
+                labelText: 'Instructions',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            SizedBox(height: 16),
+            DropdownButtonFormField<String>(
+              decoration: InputDecoration(
+                labelText: 'Voice',
+                border: OutlineInputBorder(),
+              ),
+              value: _editedVoice.name,
+              items: Voice.values
+                  .map((v) => DropdownMenuItem(value: v.name, child: Text(v.name)))
+                  .toList(),
+              onChanged: (v) => setState(() {
+                if (v != null) _editedVoice = Voice.values.firstWhere((v) => v.name == v);
+              }),
+            ),
+            SizedBox(height: 16),
+            DropdownButtonFormField<String>(
+              decoration: InputDecoration(
+                labelText: 'Input Audio Transcription',
+                border: OutlineInputBorder(),
+              ),
+              value: _editedTranscription.model,
+              items: _transcriptionOptions
+                  .map((t) => DropdownMenuItem(value: t.model, child: Text(t.model as String)))
+                  .toList(),
+              onChanged: (v) => setState(() {
+                if (v != null) _editedTranscription = _transcriptionOptions.firstWhere((t) => t.model == v);
+              }),
+            ),
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              child: Text(
+                'Enabling Input Audio Transcription adds more cost.',
+                style: TextStyle(fontSize: 12),
+              ),
+            ),
+            SizedBox(height: 16),
+            Text('Temperature: ${_editedTemperature.toStringAsFixed(2)}'),
+            Slider(
+              value: _editedTemperature,
+              min: 0.6,
+              max: 1.2,
+              divisions: 11,
+              onChanged: (v) => setState(() => _editedTemperature = v),
+            ),
+            SizedBox(height: 16),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Max Response Tokens:'),
+                      Text(_editedMaxResponseTokens > PushToTalkPreferences.MAX_RESPONSE_OUTPUT_TOKENS
+                          ? 'inf'
+                          : _editedMaxResponseTokens.toString()),
+                      Slider(
+                        value: _editedMaxResponseTokens.toDouble(),
+                        min: 1,
+                        max: PushToTalkPreferences.MAX_RESPONSE_OUTPUT_TOKENS.toDouble(),
+                        divisions: 11,
+                        onChanged: _editedMaxResponseTokens > PushToTalkPreferences.MAX_RESPONSE_OUTPUT_TOKENS
+                            ? null
+                            : (v) => setState(() => _editedMaxResponseTokens = v.toInt()),
+                      ),
+                    ],
+                  ),
+                ),
+                Column(
+                  children: [
+                    Text('Infinite'),
+                    Checkbox(
+                      value: _editedMaxResponseTokens > PushToTalkPreferences.MAX_RESPONSE_OUTPUT_TOKENS,
+                      onChanged: (v) => setState(() {
+                        if (v == true) {
+                          _lastMaxResponseTokens = _editedMaxResponseTokens;
+                          _editedMaxResponseTokens = PushToTalkPreferences.MAX_RESPONSE_OUTPUT_TOKENS + 1;
+                        } else {
+                          _editedMaxResponseTokens = _lastMaxResponseTokens;
+                        }
+                      }),
+                    ),
+                  ],
+                )
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
