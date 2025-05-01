@@ -26,6 +26,7 @@ class _MyHomePageState extends State<MyHomePage> {
   bool get isConfigured => _viewModel.isConfigured.value;
 
   late CombinedValueNotifier _pushToTalkNotifier;
+  late CombinedValueNotifier _conversationNotifier;
 
   void _navigateTo({
     required BuildContext context,
@@ -67,6 +68,13 @@ class _MyHomePageState extends State<MyHomePage> {
           () => (
       connectionState: _viewModel.connectionState.value,
       pttState: _viewModel.pttState.value,
+      ),
+    );
+    _conversationNotifier = CombinedValueNotifier(
+      [_viewModel.connectionState, _viewModel.conversationItems],
+          () => (
+      connectionState: _viewModel.connectionState.value,
+      conversationItems: _viewModel.conversationItems,
       ),
     );
 
@@ -166,29 +174,37 @@ class _MyHomePageState extends State<MyHomePage> {
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
             Expanded(
-              child: ConversationSection(
-                  conversationItems: _viewModel.conversationItems,
-                  isConnected: _viewModel.isConnected.value,
-                  onClearAll: () {
-                    _viewModel.conversationItems.clear();
-                  },
-                  onSendText: (text) async {
-                    await _viewModel.sendText(text);
-                  }
+              child: ValueListenableBuilder(
+                valueListenable: _conversationNotifier,
+                builder: (context, conversationNotifier, child) {
+                  return ConversationSection(
+                      conversationItems: _viewModel.conversationItems.value,
+                      isConnected: _viewModel.isConnected.value,
+                      onClearAll: () {
+                        _viewModel.conversationItemsClear();
+                      },
+                      onSendText: (text) async {
+                        await _viewModel.sendText(text);
+                      }
+                  );
+                }
               ),
             ),
             ValueListenableBuilder(
               valueListenable: _pushToTalkNotifier,
               builder: (context, pushToTalkNotifier, child) {
-                return PushToTalkWidget(
-                  pttState: _viewModel.pttState.value,
-                  isConnectingOrConnected:
-                  _viewModel.isConnectingOrConnected.value,
-                  isConnected: _viewModel.isConnected.value,
-                  isCancelingResponse:
-                  _viewModel.isCancelingResponse,
-                  onPushToTalkStart: _viewModel.startPushToTalk,
-                  onPushToTalkStop: _viewModel.stopPushToTalk,
+                return Padding(
+                  padding: const EdgeInsets.all(8.0),
+                  child: PushToTalkWidget(
+                    pttState: _viewModel.pttState.value,
+                    isConnectingOrConnected:
+                    _viewModel.isConnectingOrConnected.value,
+                    isConnected: _viewModel.isConnected.value,
+                    isCancelingResponse:
+                    _viewModel.isCancelingResponse,
+                    onPushToTalkStart: _viewModel.startPushToTalk,
+                    onPushToTalkStop: _viewModel.stopPushToTalk,
+                  ),
                 );
               },
             ),

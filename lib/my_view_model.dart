@@ -122,6 +122,22 @@ class ConversationItem {
   }
 }
 
+class ConversationListNotifier extends ValueNotifier<List<ConversationItem>> {
+  ConversationListNotifier() : super([]);
+
+  /// Adds an item and notifies listeners.
+  void addItem(ConversationItem item) {
+    value.add(item);
+    notifyListeners();
+  }
+
+  /// Clears all items and notifies listeners.
+  void clear() {
+    value.clear();
+    notifyListeners();
+  }
+}
+
 class MyViewModel {
   //region constants
   static final bool _debugToastVerbose = kDebugMode && false;
@@ -133,7 +149,7 @@ class MyViewModel {
   static final int _debugFakeConversationCount = (kDebugMode && false) ? 20 : 0;
   //endregion constants
 
-  late List<ConversationItem> conversationItems;
+  final conversationItems = ConversationListNotifier();
 
   List<ConversationItem> generateRandomConversationItems({required int count}) {
     if (count <= 0) {
@@ -174,10 +190,20 @@ class MyViewModel {
     return items;
   }
 
-  List<ConversationItem> initialConversations() {
+  List<ConversationItem> conversationItemsInit() {
     return (_debugFakeConversationCount > 0) ?
     generateRandomConversationItems(count: _debugFakeConversationCount)
         : [];
+  }
+
+  void conversationItemsClear() {
+    _log.info('conversationItemsClear()');
+    conversationItems.clear();
+  }
+
+  void conversationItemsAdd(ConversationItem item) {
+    _log.info('conversationItemsAdd($item)');
+    conversationItems.addItem(item);
   }
 
   MyViewModel._(
@@ -193,7 +219,7 @@ class MyViewModel {
         _inputAudioTranscriptionNotifier = ValueNotifier<InputAudioTranscriptionConfig?>(_prefs.inputAudioTranscription),
         _temperatureNotifier = ValueNotifier<double>(_prefs.temperature),
         _maxResponseOutputTokensNotifier = ValueNotifier<int?>(_prefs.maxResponseOutputTokens) {
-    conversationItems = initialConversations();
+    conversationItems.value = conversationItemsInit();
   }
 
   static Future<MyViewModel> create() async {
@@ -693,5 +719,21 @@ class MyViewModel {
   //endregion PushToTalk
 
   Future<void> sendText(String text) async {
+    _log.info('sendText(${quote(text)})');
+    _realtimeClient?.send(
+      RealtimeEvent.conversationItemCreate(
+          eventId: RealtimeUtils.generateId(),
+          item: Item.message(
+              id: RealtimeUtils.generateId(),
+              type: ItemType.message,
+              role: ItemRole.user,
+              content: List.unmodifiable([
+                ContentPart.inputText(text: text)
+              ]))
+      )
+    );
+    _realtimeClient?.send(
+      RealtimeEvent.responseCreate(eventId: RealtimeUtils.generateId())
+    );
   }
 }

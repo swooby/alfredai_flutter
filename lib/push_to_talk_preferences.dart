@@ -261,6 +261,7 @@ class _PushToTalkPreferencesScreenState
                 _saveOperation();
               });
             },
+            child: Text('Save'),
           ),
         ],
       ),
