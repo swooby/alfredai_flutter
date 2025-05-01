@@ -1,16 +1,8 @@
 # alfredai_flutter
 
-Flutter version of AlfredAI
+Lighter-wight Flutter version of https://github.com/swooby/AlfredAI
 
-## Getting Started
+Specifically no Wear/Watch support.
 
-This project is a starting point for a Flutter application.
-
-A few resources to get you started if this is your first Flutter project:
-
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
-
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+Only run and tested on Android.  
+Not yet run or tested on iOS, Linux, MacOS, or Windows.
