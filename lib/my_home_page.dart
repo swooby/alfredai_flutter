@@ -194,7 +194,7 @@ class _MyHomePageState extends State<MyHomePage> {
               valueListenable: _pushToTalkNotifier,
               builder: (context, pushToTalkNotifier, child) {
                 return Padding(
-                  padding: const EdgeInsets.all(8.0),
+                  padding: const EdgeInsets.all(16.0),
                   child: PushToTalkWidget(
                     pttState: _viewModel.pttState.value,
                     isConnectingOrConnected:

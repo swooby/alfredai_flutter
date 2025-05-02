@@ -4,6 +4,7 @@ import 'package:alfredai_flutter/push_to_talk_preferences.dart';
 import 'package:alfredai_flutter/push_to_talk_widget.dart';
 import 'package:alfredai_flutter/utils.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:logging/logging.dart';
 import 'package:openai_realtime_dart/openai_realtime_dart.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -235,6 +236,8 @@ class MyViewModel {
 
   Future<void> initialize() async {
     _log.info('+initialize()');
+
+    await _initMic();
 
     _updateIsConfiguredState();
 
@@ -625,6 +628,10 @@ class MyViewModel {
 
       _log.info('connect: Attempting to connect...');
       if (await _realtimeClient!.connect(
+        getMicrophoneCallback: () async {
+          if (!_micReady) await _initMic();
+          return _micStream;
+        },
       )) {
         setConnectionState(ConnectionState.connecting);
       }
@@ -714,6 +721,69 @@ class MyViewModel {
   }
 
   Future<void> pushToTalk(bool enable) async {
+    _log.info('pushToTalk($enable)');
+    if (enable) {
+      await _realtimeClient?.send(
+        RealtimeEvent.inputAudioBufferClear(
+          eventId: RealtimeUtils.generateId(),
+        ),
+      );
+      _enableMic(true);
+    } else {
+      _enableMic(false);
+      await _realtimeClient?.send(
+        RealtimeEvent.inputAudioBufferCommit(
+          eventId: RealtimeUtils.generateId(),
+        ),
+      );
+      await _realtimeClient?.send(
+        RealtimeEvent.responseCreate(eventId: RealtimeUtils.generateId()),
+      );
+    }
+  }
+
+  void _enableMic(bool enable) {
+    _log.info('_enableMic($enable)');
+    _micStream.getAudioTracks().forEach((track) {
+      //_log.info('track: $track');
+      final settings = track.getSettings();
+      //_log.info('track settings: $settings');
+      if (settings['kind'] == 'audioinput') {
+        _log.info('_enableMic: Setting track $track enabled=$enable');
+        track.enabled = enable;
+      }
+    });
+  }
+
+  late MediaStream _micStream;
+  bool _micReady = false;
+
+  // 2. One-shot initialization
+  Future<void> _initMic() async {
+    if (_micReady) return;
+
+    final constraints = <String, dynamic>{
+      'audio': true,
+      'video': false,
+      'mandatory': {
+        'minSampleRate': 16000, // Minimum sample rate (Hz)
+        'maxSampleRate': 48000, // Maximum sample rate (Hz)
+        'minBitrate': 32000, // Minimum bitrate (bps)
+        'maxBitrate': 128000, // Maximum bitrate (bps)
+      },
+      'optional': [
+        {
+          // Enhances voice quality
+          'googHighpassFilter': true,
+          'googNoiseSuppression': true,
+          'googEchoCancellation': true,
+          'googAutoGainControl': true,
+        },
+      ],
+    };
+    _micStream = await navigator.mediaDevices.getUserMedia(constraints);
+    _enableMic(false);
+    _micReady = true;
   }
 
   //endregion PushToTalk
