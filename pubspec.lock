@@ -283,7 +283,7 @@ packages:
   openai_realtime_dart:
     dependency: "direct main"
     description:
-      path: "../langchain_dart/packages/openai_realtime_dart"
+      path: "langchain_dart/packages/openai_realtime_dart"
       relative: true
     source: path
     version: "0.0.3+1"

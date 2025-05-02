@@ -674,6 +674,7 @@ class MyViewModel {
         if (realtimeClient != null) {
           _log.info('_disconnectInternal: Disconnecting RealtimeClient...');
           realtimeClient.disconnect();
+          _realtimeClient = null;
           _log.info('_disconnectInternal: ...RealtimeClient disconnected');
         }
       }

@@ -1,0 +1,3 @@
+[submodule "langchain_dart"]
+	path = langchain_dart
+	url = https://github.com/swooby/langchain_dart.git
